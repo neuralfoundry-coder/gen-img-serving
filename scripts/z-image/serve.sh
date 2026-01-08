@@ -27,7 +27,6 @@ MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
-NUM_SCHEDULER_STEPS="${NUM_SCHEDULER_STEPS:-10}"
 
 # =============================================================================
 # Helper Functions
@@ -101,7 +100,6 @@ cmd_start() {
     print_info "  - Max Num Seqs: ${MAX_NUM_SEQS}"
     print_info "  - Max Model Length: ${MAX_MODEL_LEN}"
     print_info "  - Max Batched Tokens: ${MAX_NUM_BATCHED_TOKENS}"
-    print_info "  - Scheduler Steps: ${NUM_SCHEDULER_STEPS}"
     print_info "  - GPU Memory Utilization: ${GPU_MEMORY_UTILIZATION}"
     
     docker run -d \
@@ -119,8 +117,7 @@ cmd_start() {
         --max-num-seqs "${MAX_NUM_SEQS}" \
         --max-model-len "${MAX_MODEL_LEN}" \
         --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}" \
-        --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
-        --num-scheduler-steps "${NUM_SCHEDULER_STEPS}"
+        --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}"
     
     print_success "Container ${CONTAINER_NAME} started successfully!"
     print_info "API endpoint: http://${HOST}:${PORT}"
@@ -188,7 +185,6 @@ cmd_help() {
     echo "  MAX_NUM_SEQS            Maximum number of sequences per batch (default: 16)"
     echo "  MAX_MODEL_LEN           Maximum model context length (default: 4096)"
     echo "  MAX_NUM_BATCHED_TOKENS  Maximum number of batched tokens (default: 8192)"
-    echo "  NUM_SCHEDULER_STEPS     Number of scheduler steps (default: 10)"
     echo "  GPU_MEMORY_UTILIZATION  GPU memory utilization ratio (default: 0.90)"
     echo ""
     echo "Examples:"
