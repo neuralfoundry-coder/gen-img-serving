@@ -17,14 +17,17 @@ MODEL_NAME="Tongyi-MAI/Z-Image-Turbo"
 # Default values (can be overridden by environment variables)
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8001}"
-GPUS="${GPUS:-all}"  # "all" or device ids like "0" or "0,1"
+INTERNAL_PORT="${INTERNAL_PORT:-8091}"
+GPUS="${GPUS:-1}"  # GPU count or device ids like "0" or "0,1"
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
 
-# Batch configuration for 32GB GPU RAM
+# Batch configuration for 32GB GPU RAM (optimized settings)
 # Z-Image-Turbo 모델 기준 최적화 설정
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
+MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
+NUM_SCHEDULER_STEPS="${NUM_SCHEDULER_STEPS:-10}"
 
 # =============================================================================
 # Helper Functions
@@ -93,34 +96,31 @@ cmd_start() {
     
     print_info "Configuration:"
     print_info "  - Host: ${HOST}"
-    print_info "  - Port: ${PORT}"
+    print_info "  - Port: ${PORT} (internal: ${INTERNAL_PORT})"
     print_info "  - GPUs: ${GPUS}"
     print_info "  - Max Num Seqs: ${MAX_NUM_SEQS}"
     print_info "  - Max Model Length: ${MAX_MODEL_LEN}"
+    print_info "  - Max Batched Tokens: ${MAX_NUM_BATCHED_TOKENS}"
+    print_info "  - Scheduler Steps: ${NUM_SCHEDULER_STEPS}"
     print_info "  - GPU Memory Utilization: ${GPU_MEMORY_UTILIZATION}"
-    
-    # Build GPU flag
-    if [ "${GPUS}" = "all" ]; then
-        GPU_FLAG="all"
-    else
-        GPU_FLAG="\"device=${GPUS}\""
-    fi
     
     docker run -d \
         --name "${CONTAINER_NAME}" \
-        --gpus ${GPU_FLAG} \
+        --runtime nvidia \
+        --gpus "${GPUS}" \
         -v "${HF_CACHE}:/root/.cache/huggingface" \
         --env "HF_TOKEN=${HF_TOKEN}" \
-        -p "${PORT}:${PORT}" \
+        -p "${PORT}:${INTERNAL_PORT}" \
         --ipc=host \
         --restart unless-stopped \
         "${DOCKER_IMAGE}" \
         --model "${MODEL_NAME}" \
-        --host "${HOST}" \
-        --port "${PORT}" \
+        --port "${INTERNAL_PORT}" \
         --max-num-seqs "${MAX_NUM_SEQS}" \
         --max-model-len "${MAX_MODEL_LEN}" \
-        --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}"
+        --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}" \
+        --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
+        --num-scheduler-steps "${NUM_SCHEDULER_STEPS}"
     
     print_success "Container ${CONTAINER_NAME} started successfully!"
     print_info "API endpoint: http://${HOST}:${PORT}"
@@ -180,12 +180,15 @@ cmd_help() {
     echo ""
     echo "Environment Variables:"
     echo "  HOST                    Server host (default: 0.0.0.0)"
-    echo "  PORT                    Server port (default: 8001)"
-    echo "  GPUS                    GPUs to use: 'all' or device ids like '0' or '0,1' (default: all)"
+    echo "  PORT                    External server port (default: 8001)"
+    echo "  INTERNAL_PORT           Internal container port (default: 8091)"
+    echo "  GPUS                    GPU count or device ids like '0' or '0,1' (default: 1)"
     echo "  HF_TOKEN                Hugging Face API token"
     echo "  HF_CACHE                Hugging Face cache directory (default: ~/.cache/huggingface)"
-    echo "  MAX_NUM_SEQS            Maximum number of sequences per batch (default: 8)"
+    echo "  MAX_NUM_SEQS            Maximum number of sequences per batch (default: 16)"
     echo "  MAX_MODEL_LEN           Maximum model context length (default: 4096)"
+    echo "  MAX_NUM_BATCHED_TOKENS  Maximum number of batched tokens (default: 8192)"
+    echo "  NUM_SCHEDULER_STEPS     Number of scheduler steps (default: 10)"
     echo "  GPU_MEMORY_UTILIZATION  GPU memory utilization ratio (default: 0.90)"
     echo ""
     echo "Examples:"
