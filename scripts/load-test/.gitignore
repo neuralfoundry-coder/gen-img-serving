@@ -3,3 +3,7 @@ images/*.png
 images/*.jpg
 images/*.jpeg
 
+# Ignore ab test results but keep the directory
+results/*.txt
+results/*.csv
+
