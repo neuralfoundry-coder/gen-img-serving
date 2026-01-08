@@ -75,9 +75,12 @@ setup_images_dir() {
 # Check if server is available
 check_server() {
     print_info "Checking server availability at ${BASE_URL}..."
-    if curl -s --connect-timeout 5 "${BASE_URL}/health" > /dev/null 2>&1 || \
-       curl -s --connect-timeout 5 "${BASE_URL}/v1/models" > /dev/null 2>&1; then
-        print_success "Server is available."
+    # Use /health or just check if port is open (vllm-omni doesn't support /v1/models)
+    if curl -s --connect-timeout 5 "${BASE_URL}/health" > /dev/null 2>&1; then
+        print_success "Server is available (health check passed)."
+        return 0
+    elif curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" "${BASE_URL}/" 2>/dev/null | grep -q "200\|404\|405"; then
+        print_success "Server is available (port is open)."
         return 0
     else
         print_warning "Server health check failed. Proceeding anyway..."
