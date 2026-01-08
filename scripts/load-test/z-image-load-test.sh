@@ -139,16 +139,28 @@ run_concurrent_test() {
     local pids=()
     local results=()
     local temp_dir=$(mktemp -d)
+    local start_signal="${temp_dir}/start_signal"
     
     print_info "Starting ${concurrent} concurrent request(s)..."
     
-    local test_start=$(date +%s.%N)
-    
-    # Launch concurrent requests
+    # Launch all workers first (they wait for signal)
     for i in $(seq 1 $concurrent); do
-        make_request $i $concurrent > "${temp_dir}/result_${i}.txt" &
+        (
+            # Wait for start signal
+            while [ ! -f "$start_signal" ]; do
+                sleep 0.01
+            done
+            make_request $i $concurrent
+        ) > "${temp_dir}/result_${i}.txt" 2>&1 &
         pids+=($!)
     done
+    
+    # Small delay to ensure all workers are waiting
+    sleep 0.1
+    
+    # Send start signal - all workers start simultaneously
+    local test_start=$(date +%s.%N)
+    touch "$start_signal"
     
     # Wait for all requests to complete
     for pid in "${pids[@]}"; do
