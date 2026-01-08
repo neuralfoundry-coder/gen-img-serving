@@ -2,6 +2,7 @@
 #
 # Docker & NVIDIA Container Toolkit Installation Script
 # Target: Ubuntu 24.04 LTS
+# Note: NVIDIA Driver must be pre-installed
 #
 
 set -e
@@ -30,6 +31,14 @@ check_root() {
         print_error "This script must be run as root (sudo)."
         exit 1
     fi
+}
+
+check_nvidia_driver() {
+    if ! command -v nvidia-smi &> /dev/null; then
+        print_error "NVIDIA driver is not installed. Please install NVIDIA driver first."
+        exit 1
+    fi
+    print_success "NVIDIA driver detected."
 }
 
 # =============================================================================
@@ -131,11 +140,11 @@ verify_installation() {
     fi
     
     echo ""
-    print_info "Testing NVIDIA Docker..."
-    if docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi 2>/dev/null; then
+    print_info "Testing GPU access in Docker..."
+    if docker run --rm --gpus all ubuntu nvidia-smi 2>/dev/null; then
         print_success "NVIDIA Docker is working correctly!"
     else
-        print_warning "NVIDIA Docker test failed. Please check your GPU driver installation."
+        print_warning "GPU test skipped or failed. Run manually: docker run --rm --gpus all ubuntu nvidia-smi"
     fi
 }
 
@@ -150,7 +159,9 @@ main() {
     echo ""
     
     check_root
+    check_nvidia_driver
     
+    echo ""
     print_info "This script will install:"
     print_info "  - Docker Engine (latest)"
     print_info "  - Docker Compose Plugin"
@@ -181,4 +192,3 @@ main() {
 
 # Run main function
 main "$@"
-
