@@ -1,8 +1,8 @@
 #!/bin/bash
 #
-# NVIDIA CUDA Toolkit Installation Script
+# NVIDIA CUDA Environment Setup Script
 # Target: Ubuntu 24.04 LTS (Noble Numbat)
-# CUDA Version: 12.8
+# Note: NVIDIA Driver and CUDA are pre-installed
 #
 
 set -e
@@ -64,6 +64,26 @@ check_nvidia_gpu() {
     print_success "NVIDIA GPU detected."
 }
 
+check_nvidia_driver() {
+    if ! command -v nvidia-smi &> /dev/null; then
+        print_error "NVIDIA driver is not installed. Please install NVIDIA driver first."
+        exit 1
+    fi
+    print_success "NVIDIA driver is installed:"
+    nvidia-smi --query-gpu=driver_version,name --format=csv,noheader
+}
+
+check_cuda() {
+    if [ -d "/usr/local/cuda" ] || command -v nvcc &> /dev/null; then
+        print_success "CUDA is installed."
+        if command -v nvcc &> /dev/null; then
+            nvcc --version | grep "release"
+        fi
+    else
+        print_warning "CUDA not found. Environment may not be configured."
+    fi
+}
+
 # =============================================================================
 # Installation Steps
 # =============================================================================
@@ -84,101 +104,18 @@ install_prerequisites() {
     print_success "Prerequisites installed."
 }
 
-remove_old_nvidia() {
-    print_info "Removing old NVIDIA drivers if present..."
-    
-    # Unhold any held packages
-    apt-mark unhold nvidia-* libnvidia-* cuda-* 2>/dev/null || true
-    
-    # Stop display manager if running
-    systemctl stop gdm3 2>/dev/null || true
-    systemctl stop lightdm 2>/dev/null || true
-    systemctl stop sddm 2>/dev/null || true
-    
-    # Remove conflicting wayland packages first
-    apt-get remove --purge -y libnvidia-egl-wayland1 2>/dev/null || true
-    
-    # Remove all NVIDIA and CUDA related packages thoroughly
-    apt-get remove --purge -y \
-        'nvidia-*' \
-        'libnvidia-*' \
-        'cuda-*' \
-        'libcuda*' \
-        'libcudnn*' \
-        'libnccl*' \
-        'nvidia-kernel-common*' \
-        'nvidia-kernel-source*' \
-        'nvidia-modprobe' \
-        'nvidia-settings' \
-        'nvidia-prime' \
-        'xserver-xorg-video-nvidia*' \
-        2>/dev/null || true
-    
-    # Clean up
-    apt-get autoremove -y
-    apt-get autoclean
-    
-    # Remove any leftover nvidia config
-    rm -rf /etc/modprobe.d/nvidia*.conf 2>/dev/null || true
-    rm -rf /etc/modprobe.d/blacklist-nvidia*.conf 2>/dev/null || true
-    
-    # Update initramfs
-    update-initramfs -u 2>/dev/null || true
-    
-    print_success "Old NVIDIA packages removed."
-}
-
-add_cuda_repo() {
-    print_info "Adding NVIDIA CUDA repository..."
-    
-    # Pin NVIDIA repository to have higher priority than Ubuntu's
-    # This prevents package conflicts between Ubuntu and NVIDIA repos
-    cat > /etc/apt/preferences.d/cuda-repository-pin-600 << 'EOF'
-Package: *
-Pin: origin developer.download.nvidia.com
-Pin-Priority: 600
-EOF
-    
-    # Block Ubuntu's nvidia packages to prevent conflicts
-    cat > /etc/apt/preferences.d/ubuntu-nvidia-block << 'EOF'
-Package: nvidia-driver-*
-Pin: release o=Ubuntu
-Pin-Priority: -1
-
-Package: libnvidia-*
-Pin: release o=Ubuntu
-Pin-Priority: -1
-EOF
-    
-    # Download and install CUDA keyring
-    KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/${UBUNTU_VERSION}/${ARCH}/cuda-keyring_1.1-1_all.deb"
-    
-    wget -q "${KEYRING_URL}" -O /tmp/cuda-keyring.deb
-    dpkg -i /tmp/cuda-keyring.deb
-    rm -f /tmp/cuda-keyring.deb
-    
-    apt-get update
-    
-    print_success "CUDA repository added."
-}
-
-install_cuda() {
-    print_info "Installing CUDA ${CUDA_VERSION}..."
-    
-    # Clean apt cache to avoid stale package info
-    apt-get clean
-    apt-get update
-    
-    # Install CUDA meta-package (includes compatible driver automatically)
-    # cuda-12-8 메타패키지가 호환되는 드라이버를 자동 설치
-    # --no-install-recommends로 불필요한 패키지 충돌 방지
-    apt-get install -y --no-install-recommends cuda-12-8
-    
-    print_success "CUDA ${CUDA_VERSION} installed."
-}
-
 install_cudnn() {
     print_info "Installing cuDNN..."
+    
+    # Add CUDA repository if not exists
+    if [ ! -f /etc/apt/sources.list.d/cuda-ubuntu2404-x86_64.list ]; then
+        print_info "Adding NVIDIA CUDA repository for cuDNN..."
+        KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/${UBUNTU_VERSION}/${ARCH}/cuda-keyring_1.1-1_all.deb"
+        wget -q "${KEYRING_URL}" -O /tmp/cuda-keyring.deb
+        dpkg -i /tmp/cuda-keyring.deb
+        rm -f /tmp/cuda-keyring.deb
+        apt-get update
+    fi
     
     # cuDNN 9 for CUDA 12
     apt-get install -y --no-install-recommends \
@@ -230,16 +167,21 @@ verify_installation() {
     export PATH=/usr/local/cuda/bin${PATH:+:${PATH}}
     export LD_LIBRARY_PATH=/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
     
+    echo ""
+    print_info "NVIDIA Driver:"
+    nvidia-smi
+    
+    echo ""
     if command -v nvcc &> /dev/null; then
         print_success "CUDA compiler (nvcc) is available:"
         nvcc --version
     else
-        print_warning "nvcc not found in PATH. Please reboot and try again."
+        print_warning "nvcc not found in PATH. Please check CUDA installation."
     fi
     
     echo ""
-    print_info "Installed CUDA packages:"
-    dpkg -l | grep -E "cuda|nvidia" | head -20
+    print_info "Installed CUDA/NVIDIA packages:"
+    dpkg -l | grep -E "cuda|nvidia|cudnn" | head -20
 }
 
 # =============================================================================
@@ -247,7 +189,7 @@ verify_installation() {
 # =============================================================================
 main() {
     echo "=============================================="
-    echo "  NVIDIA CUDA ${CUDA_VERSION} Installation"
+    echo "  NVIDIA CUDA Environment Setup"
     echo "  Target: Ubuntu 24.04 LTS"
     echo "=============================================="
     echo ""
@@ -255,39 +197,37 @@ main() {
     check_root
     check_ubuntu_version
     check_nvidia_gpu
+    check_nvidia_driver
+    check_cuda
     
     echo ""
-    print_info "This script will install:"
-    print_info "  - CUDA 12.8 (includes compatible NVIDIA driver)"
-    print_info "  - cuDNN 9 for CUDA 12"
-    print_warning "All existing NVIDIA packages will be removed first."
+    print_info "This script will:"
+    print_info "  - Install build prerequisites"
+    print_info "  - Install cuDNN 9 for CUDA 12"
+    print_info "  - Configure environment variables"
     echo ""
     
-    read -p "Proceed with installation? (y/N) " -n 1 -r
+    read -p "Proceed with setup? (y/N) " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        print_info "Installation cancelled."
+        print_info "Setup cancelled."
         exit 0
     fi
     
     echo ""
     install_prerequisites
-    remove_old_nvidia
-    add_cuda_repo
-    install_cuda
     install_cudnn
     configure_environment
     verify_installation
     
     echo ""
     echo "=============================================="
-    print_success "Installation complete!"
+    print_success "Setup complete!"
     echo "=============================================="
-    print_warning "Please REBOOT your system to load the NVIDIA driver."
-    print_info "After reboot, verify with: nvidia-smi"
+    print_info "Environment variables have been configured."
+    print_info "Run 'source /etc/profile.d/cuda.sh' or re-login to apply."
     echo ""
 }
 
 # Run main function
 main "$@"
-
