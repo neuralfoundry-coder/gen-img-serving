@@ -79,14 +79,14 @@ cmd_start() {
     check_docker
     check_nvidia_docker
     
+    # Stop and remove existing container if exists
     if is_running; then
-        print_warning "Container ${CONTAINER_NAME} is already running."
-        return 0
+        print_info "Stopping existing running container..."
+        docker stop "${CONTAINER_NAME}" > /dev/null
     fi
     
-    # Remove existing stopped container if exists
     if container_exists; then
-        print_info "Removing existing stopped container..."
+        print_info "Removing existing container..."
         docker rm "${CONTAINER_NAME}" > /dev/null
     fi
     
