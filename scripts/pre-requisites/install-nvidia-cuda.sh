@@ -87,15 +87,68 @@ install_prerequisites() {
 remove_old_nvidia() {
     print_info "Removing old NVIDIA drivers if present..."
     
-    # Remove old NVIDIA packages
-    apt-get remove --purge -y 'nvidia-*' 'libnvidia-*' 'cuda-*' 'libcuda*' 2>/dev/null || true
+    # Unhold any held packages
+    apt-mark unhold nvidia-* libnvidia-* cuda-* 2>/dev/null || true
+    
+    # Stop display manager if running
+    systemctl stop gdm3 2>/dev/null || true
+    systemctl stop lightdm 2>/dev/null || true
+    systemctl stop sddm 2>/dev/null || true
+    
+    # Remove conflicting wayland packages first
+    apt-get remove --purge -y libnvidia-egl-wayland1 2>/dev/null || true
+    
+    # Remove all NVIDIA and CUDA related packages thoroughly
+    apt-get remove --purge -y \
+        'nvidia-*' \
+        'libnvidia-*' \
+        'cuda-*' \
+        'libcuda*' \
+        'libcudnn*' \
+        'libnccl*' \
+        'nvidia-kernel-common*' \
+        'nvidia-kernel-source*' \
+        'nvidia-modprobe' \
+        'nvidia-settings' \
+        'nvidia-prime' \
+        'xserver-xorg-video-nvidia*' \
+        2>/dev/null || true
+    
+    # Clean up
     apt-get autoremove -y
+    apt-get autoclean
+    
+    # Remove any leftover nvidia config
+    rm -rf /etc/modprobe.d/nvidia*.conf 2>/dev/null || true
+    rm -rf /etc/modprobe.d/blacklist-nvidia*.conf 2>/dev/null || true
+    
+    # Update initramfs
+    update-initramfs -u 2>/dev/null || true
     
     print_success "Old NVIDIA packages removed."
 }
 
 add_cuda_repo() {
     print_info "Adding NVIDIA CUDA repository..."
+    
+    # Pin NVIDIA repository to have higher priority than Ubuntu's
+    # This prevents package conflicts between Ubuntu and NVIDIA repos
+    cat > /etc/apt/preferences.d/cuda-repository-pin-600 << 'EOF'
+Package: *
+Pin: origin developer.download.nvidia.com
+Pin-Priority: 600
+EOF
+    
+    # Block Ubuntu's nvidia packages to prevent conflicts
+    cat > /etc/apt/preferences.d/ubuntu-nvidia-block << 'EOF'
+Package: nvidia-driver-*
+Pin: release o=Ubuntu
+Pin-Priority: -1
+
+Package: libnvidia-*
+Pin: release o=Ubuntu
+Pin-Priority: -1
+EOF
     
     # Download and install CUDA keyring
     KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/${UBUNTU_VERSION}/${ARCH}/cuda-keyring_1.1-1_all.deb"
@@ -112,12 +165,14 @@ add_cuda_repo() {
 install_cuda() {
     print_info "Installing CUDA ${CUDA_VERSION}..."
     
-    # Install CUDA toolkit
-    # cuda-12-8 패키지는 드라이버와 툴킷을 모두 포함
-    apt-get install -y cuda-toolkit-12-8
+    # Clean apt cache to avoid stale package info
+    apt-get clean
+    apt-get update
     
-    # Install NVIDIA driver (latest compatible version)
-    apt-get install -y nvidia-driver-565
+    # Install CUDA meta-package (includes compatible driver automatically)
+    # cuda-12-8 메타패키지가 호환되는 드라이버를 자동 설치
+    # --no-install-recommends로 불필요한 패키지 충돌 방지
+    apt-get install -y --no-install-recommends cuda-12-8
     
     print_success "CUDA ${CUDA_VERSION} installed."
 }
@@ -125,7 +180,17 @@ install_cuda() {
 install_cudnn() {
     print_info "Installing cuDNN..."
     
-    apt-get install -y libcudnn9-cuda-12 libcudnn9-dev-cuda-12
+    # cuDNN 9 for CUDA 12
+    apt-get install -y --no-install-recommends \
+        libcudnn9-cuda-12 \
+        libcudnn9-dev-cuda-12 \
+        2>/dev/null || {
+            print_warning "cuDNN 9 not available, trying cuDNN 8..."
+            apt-get install -y --no-install-recommends \
+                libcudnn8 \
+                libcudnn8-dev \
+                2>/dev/null || print_warning "cuDNN installation skipped."
+        }
     
     print_success "cuDNN installed."
 }
@@ -193,9 +258,9 @@ main() {
     
     echo ""
     print_info "This script will install:"
-    print_info "  - NVIDIA Driver 565 (CUDA 12.8 compatible)"
-    print_info "  - CUDA Toolkit 12.8"
+    print_info "  - CUDA 12.8 (includes compatible NVIDIA driver)"
     print_info "  - cuDNN 9 for CUDA 12"
+    print_warning "All existing NVIDIA packages will be removed first."
     echo ""
     
     read -p "Proceed with installation? (y/N) " -n 1 -r
