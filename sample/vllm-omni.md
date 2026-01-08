@@ -10,5 +10,3 @@ source .venv/bin/activate
 # installation of vLLM and vLLM-Omni
 uv pip install vllm==0.12.0 --torch-backend=auto
 uv pip install vllm-omni
-
-
