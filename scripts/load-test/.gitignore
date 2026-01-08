@@ -1,0 +1,5 @@
+# Ignore generated images but keep the directory
+images/*.png
+images/*.jpg
+images/*.jpeg
+
