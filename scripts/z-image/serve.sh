@@ -17,7 +17,7 @@ MODEL_NAME="Tongyi-MAI/Z-Image-Turbo"
 # Default values (can be overridden by environment variables)
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8001}"
-GPU_COUNT="${GPU_COUNT:-1}"
+GPUS="${GPUS:-all}"  # "all" or device ids like "0" or "0,1"
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
 
 # Batch configuration for 32GB GPU RAM
@@ -53,8 +53,10 @@ check_docker() {
 }
 
 check_nvidia_docker() {
-    if ! docker info 2>/dev/null | grep -q "Runtimes.*nvidia"; then
-        print_warning "NVIDIA Docker runtime may not be available."
+    # Check if nvidia-container-toolkit is available
+    if ! command -v nvidia-container-cli &> /dev/null; then
+        print_warning "NVIDIA Container Toolkit may not be installed."
+        print_warning "Run: sudo apt-get install -y nvidia-container-toolkit"
     fi
 }
 
@@ -92,15 +94,21 @@ cmd_start() {
     print_info "Configuration:"
     print_info "  - Host: ${HOST}"
     print_info "  - Port: ${PORT}"
-    print_info "  - GPU Count: ${GPU_COUNT}"
+    print_info "  - GPUs: ${GPUS}"
     print_info "  - Max Num Seqs: ${MAX_NUM_SEQS}"
     print_info "  - Max Model Length: ${MAX_MODEL_LEN}"
     print_info "  - GPU Memory Utilization: ${GPU_MEMORY_UTILIZATION}"
     
+    # Build GPU flag
+    if [ "${GPUS}" = "all" ]; then
+        GPU_FLAG="all"
+    else
+        GPU_FLAG="\"device=${GPUS}\""
+    fi
+    
     docker run -d \
         --name "${CONTAINER_NAME}" \
-        --runtime nvidia \
-        --gpus "${GPU_COUNT}" \
+        --gpus ${GPU_FLAG} \
         -v "${HF_CACHE}:/root/.cache/huggingface" \
         --env "HF_TOKEN=${HF_TOKEN}" \
         -p "${PORT}:${PORT}" \
@@ -173,7 +181,7 @@ cmd_help() {
     echo "Environment Variables:"
     echo "  HOST                    Server host (default: 0.0.0.0)"
     echo "  PORT                    Server port (default: 8001)"
-    echo "  GPU_COUNT               Number of GPUs to use (default: 1)"
+    echo "  GPUS                    GPUs to use: 'all' or device ids like '0' or '0,1' (default: all)"
     echo "  HF_TOKEN                Hugging Face API token"
     echo "  HF_CACHE                Hugging Face cache directory (default: ~/.cache/huggingface)"
     echo "  MAX_NUM_SEQS            Maximum number of sequences per batch (default: 8)"
