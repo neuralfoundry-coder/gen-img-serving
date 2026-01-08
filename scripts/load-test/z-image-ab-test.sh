@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# Z-Image-Turbo Load Test Script using Apache Benchmark (ab)
-# True concurrent request testing
+# Z-Image-Turbo Load Test Script
+# True concurrent request testing with image saving
 #
 
 set +e
@@ -11,11 +11,11 @@ set +e
 # =============================================================================
 BASE_URL="${BASE_URL:-http://localhost:8001}"
 ENDPOINT="/v1/images/generations"
-TIMEOUT="${TIMEOUT:-30}"
+TIMEOUT="${TIMEOUT:-60}"
 MAX_CONCURRENT="${MAX_CONCURRENT:-20}"
-REQUESTS_PER_LEVEL="${REQUESTS_PER_LEVEL:-1}"  # Number of requests per concurrency level
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IMAGES_DIR="${SCRIPT_DIR}/images"
 RESULTS_DIR="${SCRIPT_DIR}/results"
 
 # Request body
@@ -48,44 +48,37 @@ print_warning() {
     echo -e "\033[1;33m[WARNING]\033[0m $1"
 }
 
-# Check and install ab
-check_and_install_ab() {
-    if command -v ab &> /dev/null; then
-        print_success "Apache Benchmark (ab) is installed."
-        return 0
+# Check dependencies
+check_dependencies() {
+    local missing=0
+    
+    if ! command -v curl &> /dev/null; then
+        print_error "curl is required but not installed."
+        missing=1
     fi
     
-    print_warning "Apache Benchmark (ab) is not installed. Installing..."
+    if ! command -v jq &> /dev/null; then
+        print_error "jq is required but not installed."
+        print_info "Install with: sudo apt-get install -y jq"
+        missing=1
+    fi
     
-    if [ -f /etc/debian_version ]; then
-        # Debian/Ubuntu
-        sudo apt-get update
-        sudo apt-get install -y apache2-utils
-    elif [ -f /etc/redhat-release ]; then
-        # CentOS/RHEL
-        sudo yum install -y httpd-tools
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS - ab comes with macOS
-        print_info "ab should be pre-installed on macOS"
-    else
-        print_error "Unknown OS. Please install apache2-utils manually."
+    if ! command -v xargs &> /dev/null; then
+        print_error "xargs is required but not installed."
+        missing=1
+    fi
+    
+    if [ $missing -eq 1 ]; then
         exit 1
     fi
     
-    if command -v ab &> /dev/null; then
-        print_success "Apache Benchmark installed successfully."
-    else
-        print_error "Failed to install Apache Benchmark."
-        exit 1
-    fi
+    print_success "All dependencies are installed."
 }
 
-# Setup results directory
-setup_results_dir() {
-    if [ ! -d "${RESULTS_DIR}" ]; then
-        print_info "Creating results directory: ${RESULTS_DIR}"
-        mkdir -p "${RESULTS_DIR}"
-    fi
+# Setup directories
+setup_directories() {
+    mkdir -p "${IMAGES_DIR}"
+    mkdir -p "${RESULTS_DIR}"
 }
 
 # Check if server is available
@@ -100,115 +93,212 @@ check_server() {
     fi
 }
 
-# Run ab test for specific concurrency
-run_ab_test() {
+# Single request function (called by xargs)
+# Args: concurrent_level request_id images_subdir
+do_request() {
     local concurrent=$1
-    local total_requests=$((concurrent * REQUESTS_PER_LEVEL))
+    local request_id=$2
+    local images_subdir=$3
+    local start_time=$(date +%s.%N)
+    
+    local temp_response=$(mktemp)
+    local image_file="${images_subdir}/${request_id}.png"
+    
+    # Make request
+    local http_code=$(curl -s -w "%{http_code}" \
+        --max-time "${TIMEOUT}" \
+        -X POST "${BASE_URL}${ENDPOINT}" \
+        -H "Content-Type: application/json" \
+        -d "${REQUEST_BODY}" \
+        -o "${temp_response}" 2>/dev/null) || http_code="000"
+    
+    local end_time=$(date +%s.%N)
+    local duration=$(echo "$end_time - $start_time" | bc 2>/dev/null || echo "0")
+    
+    local status="FAILED"
+    local saved="NO"
+    
+    if [[ "$http_code" == "200" ]]; then
+        # Extract and save image
+        local b64_data=$(jq -r '.data[0].b64_json' "${temp_response}" 2>/dev/null)
+        
+        if [[ -n "$b64_data" && "$b64_data" != "null" ]]; then
+            echo "$b64_data" | base64 -d > "$image_file" 2>/dev/null
+            if [ -f "$image_file" ] && [ -s "$image_file" ]; then
+                status="SUCCESS"
+                saved="YES"
+            fi
+        fi
+    elif [[ "$http_code" == "000" ]]; then
+        status="TIMEOUT"
+    fi
+    
+    rm -f "${temp_response}"
+    
+    # Output result
+    echo "${request_id}|${status}|${http_code}|${duration}|${saved}"
+}
+
+export -f do_request
+export BASE_URL ENDPOINT TIMEOUT REQUEST_BODY
+
+# Run concurrent test
+run_concurrent_test() {
+    local concurrent=$1
     local timestamp=$(date +%Y%m%d_%H%M%S)
-    local result_file="${RESULTS_DIR}/ab_c${concurrent}_${timestamp}.txt"
-    local body_file=$(mktemp)
+    local images_subdir="${IMAGES_DIR}/c${concurrent}_${timestamp}"
+    local result_file="${RESULTS_DIR}/c${concurrent}_${timestamp}.txt"
     
-    # Write request body to temp file
-    echo "${REQUEST_BODY}" > "${body_file}"
+    # Create images subdirectory for this test
+    mkdir -p "${images_subdir}"
     
-    print_info "Running: ${concurrent} concurrent, ${total_requests} total requests"
+    print_info "Starting ${concurrent} concurrent request(s)..."
+    print_info "Images will be saved to: ${images_subdir}"
     
-    # Run ab test
-    ab -n ${total_requests} \
-       -c ${concurrent} \
-       -s ${TIMEOUT} \
-       -T "application/json" \
-       -p "${body_file}" \
-       "${BASE_URL}${ENDPOINT}" 2>&1 | tee "${result_file}"
+    local test_start=$(date +%s.%N)
     
-    # Cleanup
-    rm -f "${body_file}"
+    # Generate request IDs and run in parallel using xargs
+    seq 1 $concurrent | xargs -P $concurrent -I {} bash -c \
+        "do_request $concurrent {} '${images_subdir}'" > "${result_file}"
     
-    # Extract key metrics
-    local complete=$(grep "Complete requests:" "${result_file}" | awk '{print $3}')
-    local failed=$(grep "Failed requests:" "${result_file}" | awk '{print $3}')
-    local rps=$(grep "Requests per second:" "${result_file}" | awk '{print $4}')
-    local time_per_req=$(grep "Time per request:" "${result_file}" | head -1 | awk '{print $4}')
-    local total_time=$(grep "Time taken for tests:" "${result_file}" | awk '{print $5}')
+    local test_end=$(date +%s.%N)
+    local total_duration=$(echo "$test_end - $test_start" | bc 2>/dev/null || echo "0")
+    
+    # Parse results
+    local success_count=0
+    local failed_count=0
+    local timeout_count=0
+    local saved_count=0
+    local total_response_time=0
     
     echo ""
-    echo "  ┌─────────────────────────────────────────┐"
-    echo "  │ Concurrent: ${concurrent}"
-    echo "  │ Complete: ${complete:-0} / Failed: ${failed:-0}"
-    echo "  │ Requests/sec: ${rps:-0}"
-    echo "  │ Time/request: ${time_per_req:-0} ms"
-    echo "  │ Total time: ${total_time:-0} s"
-    echo "  └─────────────────────────────────────────┘"
+    echo "  Individual Results:"
+    while IFS='|' read -r req_id status http_code duration saved; do
+        printf "    Request %2s: %-8s HTTP:%s  Time:%ss  Image:%s\n" \
+            "$req_id" "$status" "$http_code" "$duration" "$saved"
+        
+        case "$status" in
+            SUCCESS)
+                success_count=$((success_count + 1))
+                total_response_time=$(echo "$total_response_time + $duration" | bc 2>/dev/null || echo "$total_response_time")
+                ;;
+            TIMEOUT)
+                timeout_count=$((timeout_count + 1))
+                ;;
+            *)
+                failed_count=$((failed_count + 1))
+                ;;
+        esac
+        
+        if [[ "$saved" == "YES" ]]; then
+            saved_count=$((saved_count + 1))
+        fi
+    done < "${result_file}"
+    
+    # Calculate average
+    local avg_time=0
+    if [ $success_count -gt 0 ]; then
+        avg_time=$(echo "scale=3; $total_response_time / $success_count" | bc 2>/dev/null || echo "0")
+    fi
+    
+    # Print summary box
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────┐"
+    printf "  │ Concurrent: %-36s│\n" "$concurrent"
+    printf "  │ Success: %-4s  Failed: %-4s  Timeout: %-4s     │\n" "$success_count" "$failed_count" "$timeout_count"
+    printf "  │ Images Saved: %-4s / %-4s                       │\n" "$saved_count" "$concurrent"
+    printf "  │ Total Time: %-8ss                          │\n" "$total_duration"
+    printf "  │ Avg Response: %-8ss                        │\n" "$avg_time"
+    printf "  │ Images: %-38s│\n" "c${concurrent}_${timestamp}/"
+    echo "  └─────────────────────────────────────────────────┘"
     echo ""
     
-    # Append to summary
-    echo "${concurrent}|${complete:-0}|${failed:-0}|${rps:-0}|${time_per_req:-0}|${total_time:-0}" >> "${RESULTS_DIR}/summary_${timestamp}.csv"
+    # List saved images
+    local image_count=$(ls -1 "${images_subdir}"/*.png 2>/dev/null | wc -l)
+    if [ "$image_count" -gt 0 ]; then
+        print_success "Saved ${image_count} image(s):"
+        ls -la "${images_subdir}"/*.png 2>/dev/null | awk '{print "    " $NF}'
+    fi
+    
+    # Return summary line for final report
+    echo "${concurrent}|${success_count}|${failed_count}|${timeout_count}|${saved_count}|${total_duration}|${avg_time}" >> /tmp/load_test_summary_$$.txt
 }
 
 # Print final summary
 print_summary() {
-    local latest_summary=$(ls -t "${RESULTS_DIR}"/summary_*.csv 2>/dev/null | head -1)
+    local summary_file="/tmp/load_test_summary_$$.txt"
     
-    if [ -z "$latest_summary" ] || [ ! -f "$latest_summary" ]; then
+    if [ ! -f "$summary_file" ]; then
         return
     fi
     
     echo ""
-    echo "=============================================="
-    echo "  LOAD TEST SUMMARY (Apache Benchmark)"
-    echo "=============================================="
+    echo "═══════════════════════════════════════════════════════════════════════"
+    echo "  FINAL LOAD TEST SUMMARY"
+    echo "═══════════════════════════════════════════════════════════════════════"
     echo ""
-    printf "%-12s %-10s %-10s %-12s %-15s %-12s\n" "Concurrent" "Complete" "Failed" "Req/sec" "Time/req(ms)" "Total(s)"
-    printf "%-12s %-10s %-10s %-12s %-15s %-12s\n" "----------" "--------" "------" "-------" "-----------" "--------"
+    printf "%-10s %-10s %-10s %-10s %-10s %-12s %-10s\n" \
+        "Concurrent" "Success" "Failed" "Timeout" "Images" "Total(s)" "Avg(s)"
+    printf "%-10s %-10s %-10s %-10s %-10s %-12s %-10s\n" \
+        "----------" "-------" "------" "-------" "------" "--------" "------"
     
-    while IFS='|' read -r concurrent complete failed rps time_per_req total_time; do
-        printf "%-12s %-10s %-10s %-12s %-15s %-12s\n" "$concurrent" "$complete" "$failed" "$rps" "$time_per_req" "$total_time"
-    done < "$latest_summary"
+    while IFS='|' read -r concurrent success failed timeout saved total avg; do
+        printf "%-10s %-10s %-10s %-10s %-10s %-12s %-10s\n" \
+            "$concurrent" "$success" "$failed" "$timeout" "$saved" "$total" "$avg"
+    done < "$summary_file"
     
     echo ""
-    print_info "Detailed results saved to: ${RESULTS_DIR}"
+    print_info "Images directory: ${IMAGES_DIR}"
+    print_info "Results directory: ${RESULTS_DIR}"
+    echo ""
+    
+    # Show directory structure
+    echo "  Image folders:"
+    ls -d "${IMAGES_DIR}"/c*_* 2>/dev/null | while read dir; do
+        local count=$(ls -1 "$dir"/*.png 2>/dev/null | wc -l)
+        echo "    $(basename $dir)/ - ${count} images"
+    done
+    
+    rm -f "$summary_file"
 }
 
 # =============================================================================
 # Main
 # =============================================================================
 main() {
-    local timestamp=$(date +%Y%m%d_%H%M%S)
-    
-    echo "=============================================="
-    echo "  Z-Image-Turbo Load Test (Apache Benchmark)"
-    echo "=============================================="
+    echo "═══════════════════════════════════════════════════════════════════════"
+    echo "  Z-Image-Turbo Load Test (True Concurrent)"
+    echo "═══════════════════════════════════════════════════════════════════════"
     echo ""
     print_info "URL: ${BASE_URL}${ENDPOINT}"
     print_info "Timeout: ${TIMEOUT}s"
     print_info "Max Concurrent: ${MAX_CONCURRENT}"
-    print_info "Requests per level: ${REQUESTS_PER_LEVEL}"
     echo ""
     
-    check_and_install_ab
-    setup_results_dir
+    check_dependencies
+    setup_directories
     check_server
     
-    # Initialize summary file
-    rm -f "${RESULTS_DIR}/summary_${timestamp}.csv"
+    # Clear previous summary
+    rm -f /tmp/load_test_summary_$$.txt
     
     echo ""
-    echo "=============================================="
-    echo "  Starting Load Tests"
-    echo "=============================================="
+    echo "═══════════════════════════════════════════════════════════════════════"
+    echo "  Starting Load Tests (1 to ${MAX_CONCURRENT} concurrent)"
+    echo "═══════════════════════════════════════════════════════════════════════"
     
     # Run tests from 1 to MAX_CONCURRENT
     for concurrent in $(seq 1 $MAX_CONCURRENT); do
         echo ""
-        echo "----------------------------------------------"
-        echo "  Test ${concurrent}/${MAX_CONCURRENT}"
-        echo "----------------------------------------------"
-        run_ab_test $concurrent
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  Test ${concurrent}/${MAX_CONCURRENT}: ${concurrent} concurrent request(s)"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        run_concurrent_test $concurrent
         
-        # Small delay between tests
+        # Delay between tests (let server recover)
         if [ $concurrent -lt $MAX_CONCURRENT ]; then
-            print_info "Waiting 3 seconds before next test..."
-            sleep 3
+            print_info "Waiting 5 seconds before next test..."
+            sleep 5
         fi
     done
     
@@ -225,15 +315,18 @@ show_help() {
     echo "  -h, --help     Show this help message"
     echo ""
     echo "Environment Variables:"
-    echo "  BASE_URL            Base URL of the server (default: http://localhost:8001)"
-    echo "  TIMEOUT             Request timeout in seconds (default: 30)"
-    echo "  MAX_CONCURRENT      Maximum concurrent requests (default: 20)"
-    echo "  REQUESTS_PER_LEVEL  Requests per concurrency level (default: 1)"
+    echo "  BASE_URL       Base URL of the server (default: http://localhost:8001)"
+    echo "  TIMEOUT        Request timeout in seconds (default: 60)"
+    echo "  MAX_CONCURRENT Maximum concurrent requests (default: 20)"
+    echo ""
+    echo "Output:"
+    echo "  Images are saved to: scripts/load-test/images/c{N}_{timestamp}/"
+    echo "  Each concurrent test creates a numbered folder with N images"
     echo ""
     echo "Examples:"
     echo "  $0"
     echo "  BASE_URL=http://192.168.1.100:8001 $0"
-    echo "  MAX_CONCURRENT=10 REQUESTS_PER_LEVEL=5 $0"
+    echo "  MAX_CONCURRENT=10 $0"
 }
 
 # Parse arguments
@@ -246,4 +339,3 @@ case "${1:-}" in
         main
         ;;
 esac
-
