@@ -92,29 +92,25 @@ make_request() {
     local start_time=$(date +%s.%N)
     local timestamp=$(date +%Y%m%d_%H%M%S)
     
-    local response
     local http_code
-    local response_body
+    local temp_response=$(mktemp)
     
-    # Make request and capture response
-    response=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
+    # Make request - save response to temp file, capture http code separately
+    http_code=$(curl -s -w "%{http_code}" \
         --max-time "${TIMEOUT}" \
         -X POST "${BASE_URL}${ENDPOINT}" \
         -H "Content-Type: application/json" \
-        -d "${REQUEST_BODY}" 2>&1) || true
+        -d "${REQUEST_BODY}" \
+        -o "${temp_response}" 2>/dev/null) || http_code="000"
     
     local end_time=$(date +%s.%N)
     local duration=$(echo "$end_time - $start_time" | bc 2>/dev/null || echo "0")
-    
-    # Extract http code
-    http_code=$(echo "$response" | grep "HTTP_CODE:" | sed 's/HTTP_CODE://')
-    response_body=$(echo "$response" | grep -v "HTTP_CODE:")
     
     # Check result and save image if successful
     if [[ "$http_code" == "200" ]]; then
         # Extract base64 image data and save to file
         local image_file="${IMAGES_DIR}/${timestamp}_c${concurrent_level}_r${request_id}.png"
-        local b64_data=$(echo "$response_body" | jq -r '.data[0].b64_json' 2>/dev/null)
+        local b64_data=$(jq -r '.data[0].b64_json' "${temp_response}" 2>/dev/null)
         
         if [[ -n "$b64_data" && "$b64_data" != "null" ]]; then
             echo "$b64_data" | base64 -d > "$image_file" 2>/dev/null
@@ -127,10 +123,14 @@ make_request() {
             echo "REQUEST_${request_id}|SUCCESS|${duration}s|HTTP_${http_code}|NO_IMAGE_DATA"
         fi
     elif [[ "$http_code" =~ ^[0-9]+$ ]]; then
-        echo "REQUEST_${request_id}|FAILED|${duration}s|HTTP_${http_code}|"
+        local error_msg=$(jq -r '.error.message // .detail // "unknown"' "${temp_response}" 2>/dev/null | head -c 50)
+        echo "REQUEST_${request_id}|FAILED|${duration}s|HTTP_${http_code}|${error_msg}"
     else
         echo "REQUEST_${request_id}|TIMEOUT|${TIMEOUT}s|TIMEOUT|"
     fi
+    
+    # Cleanup temp file
+    rm -f "${temp_response}"
 }
 
 # Run concurrent requests
