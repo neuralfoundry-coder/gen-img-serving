@@ -25,7 +25,7 @@ HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
 # Z-Image-Turbo 모델 기준 최적화 설정
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
-GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.93}"  # ~30GB for 32GB GPU
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"  # ~30GB for 32GB GPU
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 
 # =============================================================================
